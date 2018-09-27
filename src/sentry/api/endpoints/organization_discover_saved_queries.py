@@ -2,6 +2,7 @@ from __future__ import absolute_import
 
 from rest_framework import serializers
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied
 
 from sentry.api.serializers import serialize
 from sentry.api.serializers.rest_framework import ListField
@@ -9,7 +10,7 @@ from sentry.api.serializers.rest_framework import ListField
 
 from sentry.api.bases.organization import OrganizationPermission
 from sentry.api.bases import OrganizationEndpoint
-from sentry.models import DiscoverSavedQuery
+from sentry.models import DiscoverSavedQuery, Project, ProjectStatus
 
 from sentry import features
 
@@ -49,6 +50,20 @@ class DiscoverSavedQueriesSerializer(serializers.Serializer):
         required=False,
         allow_null=True,
     )
+
+    def validate_projects(self, attrs, source):
+        organization = self.context['organization']
+        projects = attrs[source]
+
+        org_projects = set(Project.objects.filter(
+            organization=organization,
+            status=ProjectStatus.VISIBLE,
+        ).values_list('id', flat=True))
+
+        if not set(projects).issubset(org_projects):
+            raise PermissionDenied
+
+        return attrs
 
     def validate(self, data):
         query = {}
@@ -97,7 +112,9 @@ class OrganizationDiscoverSavedQueriesEndpoint(OrganizationEndpoint):
         if not features.has('organizations:discover', organization, actor=request.user):
             return self.respond(status=404)
 
-        serializer = DiscoverSavedQueriesSerializer(data=request.DATA)
+        serializer = DiscoverSavedQueriesSerializer(data=request.DATA, context={
+            'organization': organization,
+        })
 
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
